@@ -1,0 +1,74 @@
+name: Zurich Rebuild
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "by Latrik"
+        required: true
+        default: "https://www.mediafire.com/file/owft4qwy3bbpbsp/ZurichFullRouteNewTouchByLatrik.apk/file"
+
+jobs:
+  rebuild:
+    name: by Latrik
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Installer les outils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unzip zipalign apksigner file
+          wget -q https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar -O apktool.jar
+
+      - name: Télécharger
+        env:
+          URL: ${{ github.event.inputs.url }}
+        run: |
+          set -e
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+          curl -sL -A "$UA" "$URL" -o page.html
+          direct=$(grep -oP 'https://download[0-9]*\.mediafire\.com/[^"'"'"' ]+' page.html | head -1 || true)
+          if [ -z "$direct" ]; then
+            b64=$(grep -oP 'data-scrambled-url="\K[^"]+' page.html | head -1 || true)
+            [ -n "$b64" ] && direct=$(echo "$b64" | base64 -d)
+          fi
+          [ -z "$direct" ] && exit 1
+          curl -L -A "$UA" "$direct" -o fichier.bin
+          if file fichier.bin | grep -qi "html"; then exit 1; fi
+
+      - name: Trouver l'APK
+        run: |
+          set -e
+          mkdir work
+          if unzip -l fichier.bin | grep -q "AndroidManifest.xml"; then
+            cp fichier.bin work/app.apk
+            APK=work/app.apk
+          else
+            unzip -q fichier.bin -d work/extracted
+            APK=$(find work/extracted -iname "*.apk" -printf "%s %p\n" | sort -rn | head -1 | cut -d' ' -f2-)
+            [ -z "$APK" ] && exit 1
+          fi
+          echo "APK=$APK" >> $GITHUB_ENV
+
+      - name: Décompiler
+        run: java -jar apktool.jar d "$APK" -o decoded -f
+
+      - name: Rebuild
+        run: java -jar apktool.jar b decoded -o rebuilt.apk --use-aapt2
+
+      - name: Aligner et signer
+        run: |
+          set -e
+          zipalign -f -p 4 rebuilt.apk aligned.apk
+          keytool -genkey -keystore k.jks -alias a -keyalg RSA -keysize 2048 \
+            -validity 10000 -storepass android -keypass android -dname "CN=Latrik"
+          apksigner sign --ks k.jks --ks-pass pass:android --key-pass pass:android \
+            --out final.apk aligned.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZurichFullRouteNewTouch-by-Latrik
+          path: final.apk
